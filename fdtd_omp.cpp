@@ -22,7 +22,7 @@ void OpenMPFDTD::run() {
                 grid.hy(i, j) += (DT / (MU0 * DX)) * (grid.ez(i+1, j) - grid.ez(i, j));
             }
         }
-        if (bc) bc->applyH(grid);   // à paralléliser si nécessaire
+        if (bc) bc->applyH(grid);   
 
         // Ez
         #pragma omp parallel for collapse(2)

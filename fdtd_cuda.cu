@@ -1,4 +1,3 @@
-
 #include "fdtd_cuda.h"
 #include <cmath>
 #include <iostream>
@@ -19,6 +18,21 @@
     } while (0)
 
 // -------------------------------------------------------------------
+// Constantes device : NX et NY
+// Comme NX/NY sont des variables inline (non constexpr) depuis la
+// migration vector, les kernels ne peuvent pas les lire directement.
+// On les synchronise depuis le host via cudaMemcpyToSymbol au début
+// de chaque run() — supporte le multi-grille sans recompilation.
+// -------------------------------------------------------------------
+__device__ __constant__ int d_NX;
+__device__ __constant__ int d_NY;
+
+inline void syncGridSizeToDevice() {
+    CUDA_CHECK(cudaMemcpyToSymbol(d_NX, &::NX, sizeof(int)));
+    CUDA_CHECK(cudaMemcpyToSymbol(d_NY, &::NY, sizeof(int)));
+}
+
+// -------------------------------------------------------------------
 // Kernels CUDA
 // -------------------------------------------------------------------
 
@@ -27,8 +41,8 @@ __global__ void updateHx_kernel(double* __restrict__ Hx,
                                  const double* __restrict__ Ez, double coeff) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i < NX && j < NY - 1) {
-        int idx = i * NY + j;
+    if (i < d_NX && j < d_NY - 1) {
+        int idx = i * d_NY + j;
         Hx[idx] -= coeff * (Ez[idx + 1] - Ez[idx]);
     }
 }
@@ -38,23 +52,22 @@ __global__ void updateHy_kernel(double* __restrict__ Hy,
                                  const double* __restrict__ Ez, double coeff) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i < NX - 1 && j < NY) {
-        int idx = i * NY + j;
-        Hy[idx] += coeff * (Ez[idx + NY] - Ez[idx]);
+    if (i < d_NX - 1 && j < d_NY) {
+        int idx = i * d_NY + j;
+        Hy[idx] += coeff * (Ez[idx + d_NY] - Ez[idx]);
     }
 }
 
 // Ez(i,j) += coeffE * [ (Hy-Hy_left)/DX - (Hx-Hx_below)/DY ]
-// Lancé sur la grille intérieure avec offset +1
 __global__ void updateEz_kernel(double* __restrict__ Ez,
                                  const double* __restrict__ Hx,
                                  const double* __restrict__ Hy,
                                  double coeffE, double invDX, double invDY) {
     int i = blockIdx.x * blockDim.x + threadIdx.x + 1;
     int j = blockIdx.y * blockDim.y + threadIdx.y + 1;
-    if (i < NX - 1 && j < NY - 1) {
-        int idx      = i * NY + j;
-        int idx_left = idx - NY;
+    if (i < d_NX - 1 && j < d_NY - 1) {
+        int idx      = i * d_NY + j;
+        int idx_left = idx - d_NY;
         int idx_down = idx - 1;
         double curl  = (Hy[idx] - Hy[idx_left]) * invDX
                      - (Hx[idx] - Hx[idx_down]) * invDY;
@@ -73,28 +86,25 @@ __global__ void applySource_kernel(double* Ez, double value, int src_idx) {
 
 __global__ void applyDirichlet_Ez_kernel(double* Ez) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid < NY) {
-        Ez[0 * NY + tid]      = 0.0;
-        Ez[(NX-1) * NY + tid] = 0.0;
+    if (tid < d_NY) {
+        Ez[0 * d_NY + tid]        = 0.0;
+        Ez[(d_NX-1) * d_NY + tid] = 0.0;
     }
-    if (tid < NX) {
-        Ez[tid * NY + 0]      = 0.0;
-        Ez[tid * NY + (NY-1)] = 0.0;
+    if (tid < d_NX) {
+        Ez[tid * d_NY + 0]        = 0.0;
+        Ez[tid * d_NY + (d_NY-1)] = 0.0;
     }
 }
 
 __global__ void applyDirichlet_H_kernel(double* Hx, double* Hy) {
-    // Reproduit exactement Dirichlet::applyH du CPU :
-    //   Hx = 0 sur i=0 et i=NX-1 (pour tout j)
-    //   Hy = 0 sur j=0 et j=NY-1 (pour tout i)
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid < NY) {
-        Hx[0 * NY + tid]      = 0.0;   // bord i=0
-        Hx[(NX-1) * NY + tid] = 0.0;   // bord i=NX-1
+    if (tid < d_NY) {
+        Hx[0 * d_NY + tid]        = 0.0;
+        Hx[(d_NX-1) * d_NY + tid] = 0.0;
     }
-    if (tid < NX) {
-        Hy[tid * NY + 0]      = 0.0;   // bord j=0
-        Hy[tid * NY + (NY-1)] = 0.0;   // bord j=NY-1
+    if (tid < d_NX) {
+        Hy[tid * d_NY + 0]        = 0.0;
+        Hy[tid * d_NY + (d_NY-1)] = 0.0;
     }
 }
 
@@ -112,21 +122,16 @@ __global__ void applyPML_E_kernel(
 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i >= NX || j >= NY) return;
-    int idx = i * NY + j;
+    if (i >= d_NX || j >= d_NY) return;
+    int idx = i * d_NY + j;
 
-    // psi_Ezx corrige partial_Hy/partial_x : difference selon i, coefficient sigma_x
-    if (i > 0) {
+    if (i > 0)
         psi_Ezx[idx] = be_x[idx] * psi_Ezx[idx]
-                     + ce_x[idx] * (Hy[idx] - Hy[idx - NY]) * invDX;
-    }
-    // psi_Ezy corrige partial_Hx/partial_y : difference selon j, coefficient sigma_y
-    if (j > 0) {
+                     + ce_x[idx] * (Hy[idx] - Hy[idx - d_NY]) * invDX;
+    if (j > 0)
         psi_Ezy[idx] = be_y[idx] * psi_Ezy[idx]
                      + ce_y[idx] * (Hx[idx] - Hx[idx - 1]) * invDY;
-    }
-    // psi_Ezx corrige +∂Hy/∂x → signe +
-    // psi_Ezy corrige −∂Hx/∂y → signe − (opposé au terme standard)
+
     Ez[idx] += coeffE * (psi_Ezx[idx] - psi_Ezy[idx]);
 }
 
@@ -140,22 +145,21 @@ __global__ void applyPML_H_kernel(
 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i >= NX || j >= NY) return;
-    int idx = i * NY + j;
+    if (i >= d_NX || j >= d_NY) return;
+    int idx = i * d_NY + j;
 
-    // psi_Hxx corrige Hx <- -∂Ez/∂y : même signe − que la mise à jour principale
-    if (j < NY - 1) {
+    if (j < d_NY - 1) {
         psi_Hxx[idx] = bh_y[idx] * psi_Hxx[idx]
                      + ch_y[idx] * (Ez[idx + 1] - Ez[idx]) * invDY;
         Hx[idx] -= coeffH * psi_Hxx[idx];
     }
-    // psi_Hyy corrige Hy <- +∂Ez/∂x : même signe + que la mise à jour principale
-    if (i < NX - 1) {
+    if (i < d_NX - 1) {
         psi_Hyy[idx] = bh_x[idx] * psi_Hyy[idx]
-                     + ch_x[idx] * (Ez[idx + NY] - Ez[idx]) * invDX;
+                     + ch_x[idx] * (Ez[idx + d_NY] - Ez[idx]) * invDX;
         Hy[idx] += coeffH * psi_Hyy[idx];
     }
 }
+
 // -------------------------------------------------------------------
 // Implémentation de la classe CudaFDTD
 // -------------------------------------------------------------------
@@ -243,8 +247,11 @@ void CudaFDTD::preparePMLCoeffs() {
 }
 
 void CudaFDTD::run() {
+    // Synchronise d_NX/d_NY vers le GPU 
+    syncGridSizeToDevice();
+
     // ----------------------------------------------------------------
-    // Détection du GPU — si aucun disponible, on s'arrête proprement
+    // Détection du GPU
     // ----------------------------------------------------------------
     int deviceCount = 0;
     CUDA_CHECK(cudaGetDeviceCount(&deviceCount));
@@ -272,11 +279,11 @@ void CudaFDTD::run() {
     const int src_idx = source.x * NY + source.y;
 
     // ----------------------------------------------------------------
-    // Boucle temporelle principale — tout sur GPU
+    // Boucle temporelle principale
     // ----------------------------------------------------------------
     for (int n = 0; n < total_steps; ++n) {
 
-        // Mise à jour de H (demi-pas) — parallèle sur toute la grille
+        // Mise à jour de H (demi-pas)
         updateHx_kernel<<<gridH, block>>>(d_Hx, d_Ez, DT / (MU0 * DY));
         updateHy_kernel<<<gridH, block>>>(d_Hy, d_Ez, DT / (MU0 * DX));
 
@@ -290,7 +297,7 @@ void CudaFDTD::run() {
             applyDirichlet_H_kernel<<<bgrid, bdim>>>(d_Hx, d_Hy);
         }
 
-        // Mise à jour de E (pas entier) — parallèle sur l'intérieur
+        // Mise à jour de E (pas entier)
         updateEz_kernel<<<gridE, block>>>(
             d_Ez, d_Hx, d_Hy,
             DT / EPS0, 1.0 / DX, 1.0 / DY);
@@ -301,17 +308,16 @@ void CudaFDTD::run() {
                 d_Ez, d_psi_Ezx, d_psi_Ezy,
                 d_be_x, d_be_y, d_ce_x, d_ce_y,
                 d_Hx, d_Hy, 1.0 / DY, 1.0 / DX, DT / EPS0);
-            // Termination PEC : Ez=0 sur les 4 bords extérieurs de la PML.
-            // Sans ce reset les bords accumulent la correction PML → divergence aux coins.
+            // Termination PEC obligatoire sur le mur extérieur de la PML
             applyDirichlet_Ez_kernel<<<bgrid, bdim>>>(d_Ez);
         } else {
             applyDirichlet_Ez_kernel<<<bgrid, bdim>>>(d_Ez);
         }
 
-        // Source ponctuelle (1 thread, index direct, sans branchement)
+        // Source ponctuelle (1 thread, index direct)
         applySource_kernel<<<1, 1>>>(d_Ez, source.getValue((n + 0.5) * DT), src_idx);
 
-        // Sauvegarde : sync GPU → copie D2H → écriture fichier
+        // Sauvegarde périodique : sync → D2H → VTK
         if (n % save_interval == 0) {
             CUDA_CHECK(cudaDeviceSynchronize());
             CUDA_CHECK(cudaMemcpy(host_grid.Ez.data(), d_Ez,
@@ -325,5 +331,12 @@ void CudaFDTD::run() {
         }
     }
 
+    // Copie finale GPU→CPU pour que getGrid() retourne l'état au dernier pas
     CUDA_CHECK(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaMemcpy(host_grid.Ez.data(), d_Ez,
+                          NCELLS*sizeof(double), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(host_grid.Hx.data(), d_Hx,
+                          NCELLS*sizeof(double), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(host_grid.Hy.data(), d_Hy,
+                          NCELLS*sizeof(double), cudaMemcpyDeviceToHost));
 }

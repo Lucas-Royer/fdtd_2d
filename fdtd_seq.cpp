@@ -6,7 +6,7 @@ void SequentialFDTD::run() {
     double time = 0.0;
 
     for (int n = 0; n < total_steps; ++n) {
-        // --- Mise à jour de H (demi-pas) ---
+        // Mise à jour de H
         // Hx[i,j] <- Hx[i,j] - (DT/(MU0*DY)) * (Ez[i,j+1] - Ez[i,j])
         for (int i = 0; i < NX; ++i) {
             for (int j = 0; j < NY - 1; ++j) {
@@ -21,7 +21,7 @@ void SequentialFDTD::run() {
         }
         if (bc) bc->applyH(grid);
 
-        // --- Mise à jour de E (pas entier) ---
+        // Mise à jour de E 
         // Ez[i,j] <- Ez[i,j] + (DT/EPS0) * [ (Hy[i,j]-Hy[i-1,j])/DX - (Hx[i,j]-Hx[i,j-1])/DY ]
         for (int i = 1; i < NX - 1; ++i) {
             for (int j = 1; j < NY - 1; ++j) {
@@ -31,13 +31,13 @@ void SequentialFDTD::run() {
             }
         }
 
-        // --- Source ponctuelle (hard source) ---
+        //  Source ponctuelle 
         time = (n + 0.5) * DT;   // on applique au milieu du pas
         grid.ez(source.x, source.y) += source.getValue(time);
 
         if (bc) bc->applyE(grid);
 
-        // --- Sauvegarde ---
+        // Sauvegarde 
         if (n % save_interval == 0) {
             writeVTK(grid, n, "seq");
             std::cout << "Step " << n << "/" << total_steps << "\n";

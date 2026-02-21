@@ -1,53 +1,72 @@
 #ifndef FDTD_SIMPLE_H
 #define FDTD_SIMPLE_H
 
-#include <array>
+#include <vector>
 #include <cmath>
 #include <memory>
 #include <string>
+#include <algorithm>
 
-// Dimensions de la grille (fixées à la compilation)
-constexpr int NX = 200;
-constexpr int NY = 200;
-constexpr int NCELLS = NX * NY;
+// Dimensions de la grille — variables globales modifiables au runtime.
+// Utiliser setGridSize() avant toute construction d'objet.
+// Note : les kernels CUDA utilisent NX/NY via des constantes de device
+// recompilées, mais la version CPU lit ces globales directement.
+inline int NX     = 200;
+inline int NY     = 200;
+inline int NCELLS = NX * NY;
+inline int NPML_G = 40;
 
-// Constantes physiques (air)
-constexpr double C0 = 299792458.0;
+// Constantes physiques
+constexpr double C0   = 299792458.0;
 constexpr double EPS0 = 8.854187817e-12;
-constexpr double MU0 = 4.0 * M_PI * 1e-7;
+constexpr double MU0  = 4.0 * M_PI * 1e-7;
 
-// Paramètres de discrétisation (CFL = 0.99)
-constexpr double DX = 1.0e-3;      // 1 mm
+// Discrétisation (CFL = 0.99/√2)
+constexpr double DX = 1.0e-3;
 constexpr double DY = 1.0e-3;
 constexpr double DT = 0.99 * DX / (C0 * 1.414);
 
+// Modifier la taille de grille (appeler avant tout constructeur)
+inline void setGridSize(int nx, int ny) {
+    NX     = nx;
+    NY     = ny;
+    NCELLS = nx * ny;
+    // PML : 10% de la grille, entre 10 et 40 couches
+    NPML_G = std::max(10, std::min(40, static_cast<int>(0.10 * std::min(nx, ny))));
+}
+
 // -----------------------------------------------------------------
-// Classe Grid : grille de Yee pour la polarisation TE
-// Stockage : std::array<double, NCELLS> (allocation statique)
+// Grid : grille de Yee TE, stockage sur le TAS (std::vector)
+// pas de stack overflow quelle que soit la taille 
+// la première implémentation utilisait std::array
 // -----------------------------------------------------------------
 class Grid {
 public:
-    std::array<double, NCELLS> Ez;
-    std::array<double, NCELLS> Hx;
-    std::array<double, NCELLS> Hy;
+    std::vector<double> Ez;
+    std::vector<double> Hx;
+    std::vector<double> Hy;
 
-    // Accès indexé (i, j) avec vérification de bornes en debug
-    double& ez(int i, int j)       { return Ez[i * NY + j]; }
-    double& hx(int i, int j)       { return Hx[i * NY + j]; }
-    double& hy(int i, int j)       { return Hy[i * NY + j]; }
+    Grid() : Ez(NCELLS, 0.0), Hx(NCELLS, 0.0), Hy(NCELLS, 0.0) {}
 
+    double& ez(int i, int j)             { return Ez[i * NY + j]; }
+    double& hx(int i, int j)             { return Hx[i * NY + j]; }
+    double& hy(int i, int j)             { return Hy[i * NY + j]; }
     const double& ez(int i, int j) const { return Ez[i * NY + j]; }
     const double& hx(int i, int j) const { return Hx[i * NY + j]; }
     const double& hy(int i, int j) const { return Hy[i * NY + j]; }
 
-    // Méthodes utilitaires
-    void reset();
+    void reset() {
+        std::fill(Ez.begin(), Ez.end(), 0.0);
+        std::fill(Hx.begin(), Hx.end(), 0.0);
+        std::fill(Hy.begin(), Hy.end(), 0.0);
+    }
+
     int getNx() const { return NX; }
     int getNy() const { return NY; }
 };
 
 // -----------------------------------------------------------------
-// Condition aux limites (interface)
+// Conditions aux limites
 // -----------------------------------------------------------------
 class BoundaryCondition {
 public:
@@ -56,69 +75,57 @@ public:
     virtual void applyH(Grid& g) = 0;
 };
 
-// Dirichlet (PEC) : Ez = 0 sur les bords
 class Dirichlet : public BoundaryCondition {
 public:
     void applyE(Grid& g) override;
     void applyH(Grid& g) override;
 };
 
-// PML simplifiée (split-field, 10 couches)
 class PML : public BoundaryCondition {
 private:
-    static constexpr int NPML = 30;
-    std::array<double, NCELLS> psi_Ezx, psi_Ezy;
-    std::array<double, NCELLS> psi_Hxx, psi_Hyy;
-    std::array<double, NCELLS> sigma_x, sigma_y;
+    int npml;
+    std::vector<double> psi_Ezx, psi_Ezy;
+    std::vector<double> psi_Hxx, psi_Hyy;
+    std::vector<double> sigma_x, sigma_y;
     double sigma_max;
 
 public:
     PML();
     void applyE(Grid& g) override;
     void applyH(Grid& g) override;
-    const std::array<double, NCELLS>& getSigmaX() const { return sigma_x; }
-    const std::array<double, NCELLS>& getSigmaY() const { return sigma_y; }
+    const std::vector<double>& getSigmaX() const { return sigma_x; }
+    const std::vector<double>& getSigmaY() const { return sigma_y; }
+    int getNPML() const { return npml; }
 };
 
 // -----------------------------------------------------------------
-// Source ponctuelle — sinusoïdale ou impulsion gaussienne
+// Source ponctuelle : sinus continu ou impulsion gaussienne
 // -----------------------------------------------------------------
 class Source {
 public:
     int x, y;
-    double freq;
-    double amp;
-    bool   pulse;    // true = impulsion gaussienne, false = sinus continu
-    double t0;       // centre temporel de l'impulsion (s)
-    double tau;      // largeur de l'impulsion (s)
+    double freq, amp;
+    bool   pulse;
+    double t0, tau;
 
-    // Constructeur sinus continu (compatibilité ascendante)
     Source(int xi, int yi, double f = 1e9, double a = 1.0)
-        : x(xi), y(yi), freq(f), amp(a), pulse(false),
-          t0(0.0), tau(0.0) {}
+        : x(xi), y(yi), freq(f), amp(a), pulse(false), t0(0.0), tau(0.0) {}
 
-    // Constructeur impulsion gaussienne (pour test PML)
-    static Source makeGaussian(int xi, int yi, double a,
-                                double t0_s, double tau_s) {
+    static Source makeGaussian(int xi, int yi, double a, double t0_s, double tau_s) {
         Source s(xi, yi, 0.0, a);
-        s.pulse = true;
-        s.t0    = t0_s;
-        s.tau   = tau_s;
+        s.pulse = true; s.t0 = t0_s; s.tau = tau_s;
         return s;
     }
 
     double getValue(double t) const {
         if (pulse) {
-            double dt = t - t0;
-            return amp * std::exp(-dt * dt / (2.0 * tau * tau));
+            double d = t - t0;
+            return amp * std::exp(-d*d / (2.0*tau*tau));
         }
         return amp * std::sin(2.0 * M_PI * freq * t);
     }
 };
 
-// -----------------------------------------------------------------
-// Écriture VTK simplifiée (format .vti)
-// -----------------------------------------------------------------
 void writeVTK(const Grid& g, int step, const std::string& prefix);
 
 #endif // FDTD_SIMPLE_H
