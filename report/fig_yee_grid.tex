@@ -1,0 +1,110 @@
+% fig_yee_grid.tex — Grille de Yee 2D avec espacements optimisés
+\begin{tikzpicture}[>=Stealth, font=\small]
+
+\def\dx{2.4}
+\def\dy{2.4}
+\def\Nx{3}
+\def\Ny{3}
+
+% Grille
+\foreach \i in {0,...,\Nx} {
+    \draw[gray!40, thin] (\i*\dx, 0) -- (\i*\dx, \Ny*\dy);
+}
+\foreach \j in {0,...,\Ny} {
+    \draw[gray!40, thin] (0, \j*\dy) -- (\Nx*\dx, \j*\dy);
+}
+
+% Ez aux nœuds entiers (i,j) — cercles bleus (taille réduite)
+\foreach \i in {0,...,\Nx} {
+    \foreach \j in {0,...,\Ny} {
+        \fill[colEz] (\i*\dx, \j*\dy) circle (4pt);
+    }
+}
+
+% Hx au milieu des arêtes horizontales — carrés rouges (taille réduite)
+\foreach \i in {0,...,\Nx} {
+    \foreach \j in {0,...,2} {
+        \node[draw=colHx, fill=colHx!20, regular polygon,
+              regular polygon sides=4, rotate=45,
+              minimum size=7pt, inner sep=0pt]
+            at (\i*\dx, \j*\dy + 0.5*\dy) {};
+    }
+}
+
+% Hy au milieu des arêtes verticales — triangles verts (taille réduite)
+\foreach \i in {0,...,2} {
+    \foreach \j in {0,...,\Ny} {
+        \node[draw=colHy, fill=colHy!30,
+              isosceles triangle, isosceles triangle apex angle=80,
+              rotate=90, minimum size=7pt, inner sep=0pt]
+            at (\i*\dx + 0.5*\dx, \j*\dy) {};
+    }
+}
+
+% Étiquettes cellule centrale (i=1, j=1) avec ancrages précis
+\def\ci{1}
+\def\cj{1}
+
+% Étiquette Ez : placée au-dessus à gauche du cercle
+\node[above left=8pt, colEz, font=\footnotesize\bfseries]
+    at (\ci*\dx, \cj*\dy) {$E_z(i,j)$};
+
+% Hx supérieur : à droite avec décalage vertical supplémentaire
+\node[anchor=west, xshift=15pt, yshift=5pt, colHx, font=\footnotesize\bfseries]
+    at (\ci*\dx, \cj*\dy + 0.5*\dy)
+    {$H_x\!\left(i,j{+}\frac{1}{2}\right)$};
+
+% Hx inférieur : à droite avec décalage vertical négatif
+\node[anchor=west, xshift=15pt, yshift=-5pt, colHx, font=\footnotesize\bfseries]
+    at (\ci*\dx, \cj*\dy - 0.5*\dy)
+    {$H_x\!\left(i,j{-}\frac{1}{2}\right)$};
+
+% Hy droite : au-dessus avec décalage horizontal
+\node[anchor=south, yshift=12pt, xshift=5pt, colHy, font=\footnotesize\bfseries]
+    at (\ci*\dx + 0.5*\dx, \cj*\dy)
+    {$H_y\!\left(i{+}\frac{1}{2},j\right)$};
+
+% Hy gauche : au-dessus avec décalage horizontal négatif
+\node[anchor=south, yshift=12pt, xshift=-5pt, colHy, font=\footnotesize\bfseries]
+    at (\ci*\dx - 0.5*\dx, \cj*\dy)
+    {$H_y\!\left(i{-}\frac{1}{2},j\right)$};
+
+% Rectangle cellule centrale
+\draw[black!30, thick, dashed]
+    (\ci*\dx-0.5*\dx+0.05, \cj*\dy-0.5*\dy+0.05)
+    rectangle
+    (\ci*\dx+0.5*\dx-0.05, \cj*\dy+0.5*\dy-0.05);
+
+% Axes (inchangés)
+\draw[->, thick] (-0.3, 0) -- (\Nx*\dx+0.5, 0) node[right] {$x$};
+\draw[->, thick] (0, -0.3) -- (0, \Ny*\dy+0.5)  node[above] {$y$};
+\foreach \i in {0,...,\Nx} {
+    \draw[thin] (\i*\dx,-0.1)--(\i*\dx,0.1);
+    \node[below=2pt,font=\scriptsize] at (\i*\dx,0) {$\i$};
+}
+\foreach \j in {1,...,\Ny} {
+    \draw[thin] (-0.1,\j*\dy)--(0.1,\j*\dy);
+    \node[left=2pt,font=\scriptsize] at (0,\j*\dy) {$\j$};
+}
+\draw[<->,thin,gray!70] (0,-0.7)--(\dx,-0.7)
+    node[midway,below,font=\scriptsize] {$\Delta x$};
+\draw[<->,thin,gray!70] (-0.7,0)--(-0.7,\dy)
+    node[midway,left,font=\scriptsize]  {$\Delta y$};
+
+% Légende (inchangée mais avec symboles plus petits)
+\def\lx{0.1*\dx}
+\def\ly{\Ny*\dy+0.75}
+\fill[colEz] (\lx,\ly) circle (4pt);
+\node[right=5pt,font=\footnotesize] at (\lx,\ly)
+    {\textcolor{colEz}{\bfseries$E_z(i,j)$} — integer nodes};
+\node[draw=colHx,fill=colHx!20,regular polygon,regular polygon sides=4,
+      rotate=45,minimum size=7pt,inner sep=0pt] at (\lx,\ly-0.42) {};
+\node[right=5pt,font=\footnotesize] at (\lx,\ly-0.42)
+    {\textcolor{colHx}{\bfseries$H_x$} — mid horizontal edges};
+\node[draw=colHy,fill=colHy!30,isosceles triangle,
+      isosceles triangle apex angle=80,rotate=90,
+      minimum size=7pt,inner sep=0pt] at (\lx,\ly-0.84) {};
+\node[right=5pt,font=\footnotesize] at (\lx,\ly-0.84)
+    {\textcolor{colHy}{\bfseries$H_y$} — mid vertical edges};
+
+\end{tikzpicture}

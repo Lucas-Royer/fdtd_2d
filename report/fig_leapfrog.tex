@@ -1,0 +1,52 @@
+% fig_leapfrog.tex — Timeline leapfrog avec espacements optimisés
+\begin{tikzpicture}[>=Stealth, font=\small]
+
+\def\dt{3.6}
+
+% Axe temps
+\draw[->, thick] (-0.5, 0) -- (3.5*\dt, 0) node[right] {time $t$};
+
+% Barres E (pas entiers) — inchangées
+\foreach \n/\lab in {0/{n{-}1}, 1/{n}, 2/{n{+}1}} {
+    \draw[colEz, line width=2pt]
+        (\n*\dt, -0.35) -- (\n*\dt, 0.35);
+    \node[colEz, above=5pt, font=\small\bfseries] at (\n*\dt, 0.35)
+        {$E_z^{\lab}$};
+    \node[below=10pt, gray, font=\scriptsize] at (\n*\dt, -0.35)
+        {$\lab\,\Delta t$};
+}
+
+% Barres H (demi-pas) — inchangées
+\foreach \n/\lab in {0.5/{n{-}\frac{1}{2}}, 1.5/{n{+}\frac{1}{2}}} {
+    \draw[colHx, line width=2pt]
+        (\n*\dt, -0.35) -- (\n*\dt, 0.35);
+    \node[colHx, below=5pt, font=\small\bfseries] at (\n*\dt, -0.35)
+        {$\mathbf{H}^{\lab}$};
+}
+
+% Flèche : mise à jour H (encore plus haute)
+\draw[->, thick, colHx!80!black]
+    (\dt*0.62, 1.0) -- (\dt*1.42, 1.0);
+\node[above, font=\scriptsize, align=center] at (\dt*1.02, 1.0)
+    {$\mathbf{H}^{n+\frac{1}{2}} = \mathbf{H}^{n-\frac{1}{2}}
+      - \frac{\Delta t}{\mu_0}\,\nabla\!\times E_z^{n}$};
+
+% Flèche : mise à jour E (encore plus basse)
+\draw[->, thick, colEz!80!black]
+    (\dt*1.58, -1.1) -- (\dt*1.96, -1.1);
+\node[below, font=\scriptsize, align=center] at (\dt*1.77, -1.1)
+    {$E_z^{n+1} = E_z^{n}
+      + \frac{\Delta t}{\varepsilon_0}\,\nabla\!\times\mathbf{H}^{n+\frac{1}{2}}$};
+
+% Accolade "1 step" (inchangée)
+\draw[decorate, decoration={brace, amplitude=6pt, raise=3pt}]
+    (2*\dt, -1.5) -- (\dt, -1.5);
+\node[below=12pt, font=\small] at (1.5*\dt, -1.5)
+    {one complete time step $\Delta t$};
+
+% Source (légèrement décalée)
+\draw[->, thin, black!60] (2*\dt, 0.85) -- (2*\dt, 0.22);
+\node[above, font=\scriptsize, black!60] at (2*\dt, 0.88)
+    {$+$ source $f(t)$};
+
+\end{tikzpicture}
